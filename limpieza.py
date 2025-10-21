@@ -10,6 +10,8 @@ from sklearn.impute import IterativeImputer
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
 from scipy.stats import iqr
+import matplotlib.pyplot as plt
+import seaborn as sns
 
 # Nombres de archivos
 FILE_PATH = "C:\\Users\\juanf\\OneDrive\\Documentos\\Proyecto_integrador-trabajo-\\IEA Global EV Data 2024 full.csv"
@@ -57,7 +59,6 @@ print(f"DataFrame codificado creado. Columnas totales: {df_encoded.shape[1]}")
 cols_to_impute = df_encoded.select_dtypes(include=np.number).columns.tolist()
 
 # Inicializar IterativeImputer (implementación de MICE/MAECI)
-# Utiliza un modelo de regresión (por defecto, BayesianRidge) para estimar los nulos.
 mice_imputer = IterativeImputer(random_state=42, max_iter=10)
 
 # Aplicar la imputación MICE al subconjunto de columnas numéricas
@@ -72,6 +73,9 @@ print("\n--- Imputación MAECI/MICE Completada ---")
 
 # Columnas numéricas clave para la detección y ajuste de outliers
 outlier_check_cols = ['price', 'range_km', 'battery_capacity', 'weight_kg', 'motor_power']
+
+# !!! PUNTO CLAVE: Guardar el DataFrame antes del capping para la comparación real "Antes vs Después"
+df_imputed_pre_capping = df_imputed[outlier_check_cols].copy()
 
 for col in outlier_check_cols:
     # 4.1. Detección: Calcular Q1, Q3 y IQR
@@ -100,7 +104,7 @@ scaler = StandardScaler()
 df_pca_scaled = scaler.fit_transform(df_imputed[pca_features])
 
 # 5.2. Aplicación de PCA
-# Reducimos a 2 componentes para la visualización en Streamlit.
+# Reducimos a 2 componentes para la visualización.
 pca = PCA(n_components=2)
 principal_components = pca.fit_transform(df_pca_scaled)
 
@@ -118,7 +122,7 @@ print(f"Varianza total explicada (PC1+PC2): {pca.explained_variance_ratio_.sum()
 df_final = df_context.copy()
 
 # Copiamos las variables imputadas, ajustadas (outliers) y usadas en PCA
-for col in pca_features + IMPUTATION_COLS:
+for col in IMPUTATION_COLS: # Usamos IMPUTATION_COLS para incluir todas las imputadas
     if col in df_imputed.columns:
         df_final[col] = df_imputed[col]
         
@@ -140,43 +144,97 @@ print(f"Filas finales listas para Streamlit: {len(df_final)}")
 
 print("\n--- 7. Generando Visualizaciones Clave para el Informe ---")
 
-# Importaciones adicionales necesarias para la visualización
-import matplotlib.pyplot as plt
-import seaborn as sns
-
 # Configuración básica de Seaborn/Matplotlib
 sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (12, 6)
+plt.rcParams['figure.titlesize'] = 16
+plt.rcParams['axes.titlesize'] = 14
+plt.rcParams['axes.labelsize'] = 12
 
 # ==============================================================================
-# 7.1. VISUALIZACIÓN DEL PROCESO DE LIMPIEZA (EJEMPLO: ANTES vs. DESPUÉS DE OUTLIERS)
-# NOTA: Para el informe, este tipo de gráfico debe hacerse ANTES de ejecutar el
-# código de 'Capping con IQR', o se debe cargar el DataFrame original imputado
-# ANTES del Capping (df_imputed_pre_capping) para una comparación directa.
-# Dado que se ejecutó el Capping, demostraremos el resultado final.
+# 7.1. BOXPLOTS: COMPARACIÓN "ANTES VS. DESPUÉS" DEL CAPPING DE OUTLIERS 💥
 # ==============================================================================
 
-# Gráfico de la distribución de una variable clave (p. ej., 'price')
-# para mostrar la distribución después de la imputación y el capping.
+print("\nGenerando Boxplots de comparación (Antes vs. Después del Capping).")
+
+# Preparamos los datos para el Boxplot comparativo (usaremos 'price' y 'battery_capacity')
+cols_compare = ['price', 'battery_capacity']
+df_comparison = pd.DataFrame()
+
+for col in cols_compare:
+    # Versión antes del capping
+    data_pre = df_imputed_pre_capping[col].rename(col)
+    data_pre = pd.DataFrame({
+        'Variable': col,
+        'Valor': data_pre,
+        'Estado': '1. Antes del Capping'
+    })
+    
+    # Versión después del capping
+    data_post = df_final[col].rename(col)
+    data_post = pd.DataFrame({
+        'Variable': col,
+        'Valor': data_post,
+        'Estado': '2. Después del Capping'
+    })
+    
+    df_comparison = pd.concat([df_comparison, data_pre, data_post], ignore_index=True)
+
+plt.figure(figsize=(14, 6))
+sns.boxplot(x='Variable', y='Valor', hue='Estado', data=df_comparison, 
+            palette={'1. Antes del Capping': 'skyblue', '2. Después del Capping': 'lightcoral'})
+plt.title(f'Comparación de Distribución: Antes vs. Después del Capping de Outliers (IQR)', fontsize=16)
+plt.xlabel('')
+plt.ylabel('Valor de la Métrica')
+plt.legend(title='Estado del Dato')
+plt.tight_layout()
+# plt.savefig('comparacion_boxplot_outliers.png')
+# plt.show()
+print("Boxplot de comparación Antes vs. Después generado.")
+
+# ==============================================================================
+# 7.2. DISTRIBUCIONES: Histograma de Price (Post-Limpieza) 📉
+# ==============================================================================
 
 plt.figure(figsize=(10, 5))
-sns.histplot(df_final['price'], bins=30, kde=True, color='skyblue')
+sns.histplot(df_final['price'], bins=30, kde=True, color='darkgreen')
 plt.title('Distribución de "price" (Imputado y con Outliers Ajustados)', fontsize=14)
-plt.xlabel('Precio (USD)', fontsize=12)
+plt.xlabel('Precio (USD) Ajustado', fontsize=12)
 plt.ylabel('Frecuencia', fontsize=12)
 plt.tight_layout()
-# Puedes guardar el gráfico para el informe si lo deseas
 # plt.savefig('distribucion_precio_limpio.png')
-# plt.show() # Descomentar para ver en un entorno interactivo
+# plt.show()
+print("Histograma de Precio generado.")
 
 
 # ==============================================================================
-# 7.2. VISUALIZACIÓN DE COMPONENTES PRINCIPALES (PCA)
-# Esencial para el informe y el panel de Streamlit
+# 7.3. MATRIZ DE CORRELACIÓN (GRÁFICO DE CALOR) 🔥
+# ==============================================================================
+
+# Matriz de correlación para las variables clave después de la limpieza
+correlation_matrix = df_final[IMPUTATION_COLS].corr()
+
+plt.figure(figsize=(12, 10))
+sns.heatmap(
+    correlation_matrix,
+    annot=True,
+    fmt=".2f",
+    cmap='coolwarm',
+    linewidths=.5,
+    cbar_kws={'label': 'Coeficiente de Correlación'}
+)
+plt.title('Matriz de Correlación de Variables Numéricas Clave (Post-Limpieza)', fontsize=16)
+plt.tight_layout()
+plt.savefig('matriz_correlacion.png')
+plt.show()
+print("Matriz de Correlación generada.")
+
+# ==============================================================================
+# 7.4. VISUALIZACIÓN DE COMPONENTES PRINCIPALES (PCA) 📊
 # ==============================================================================
 
 plt.figure(figsize=(12, 8))
-# Usamos 'region' para colorear los puntos y ver si PCA separa regiones
+# Usamos 'region' para colorear los puntos
 scatter = sns.scatterplot(
     x='PC1_Car_Specs',
     y='PC2_Car_Specs',
@@ -193,13 +251,29 @@ plt.ylabel(f'Componente Principal 2 (PC2) - Varianza Explicada: {pca.explained_v
 plt.legend(title='Región', bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.grid(True, linestyle='--', alpha=0.6)
 plt.tight_layout()
-# plt.savefig('pca_car_specs.png')
-# plt.show() # Descomentar para ver en un entorno interactivo
+plt.savefig('pca_car_specs.png')
+plt.show()
 print("PCA Scatter Plot generado.")
 
 # ==============================================================================
-# 7.3. ANÁLISIS DE TENDENCIAS (VENTAS HISTÓRICAS)
-# Fundamental para el contexto de ventas
+# 7.5. PAIR PLOT: Relación Multivariada entre Variables Clave 🔄
+# ==============================================================================
+
+print("\nGenerando Pair Plot de las especificaciones clave (puede tardar un poco)...")
+# El Pair Plot genera un gráfico de dispersión para cada par de variables.
+pair_cols = ['price', 'range_km', 'battery_capacity', 'weight_kg']
+
+# Reducimos la muestra para que el gráfico no tarde demasiado
+df_sample = df_final[pair_cols].sample(n=min(5000, len(df_final)), random_state=42)
+
+sns.pairplot(df_sample, diag_kind='kde', plot_kws={'alpha': 0.6, 's': 5})
+plt.suptitle('Pair Plot de Especificaciones Clave (Post-Limpieza)', y=1.02, fontsize=16)
+plt.savefig('pair_plot_specs.png')
+plt.show()
+print("Pair Plot generado.")
+
+# ==============================================================================
+# 7.6. ANÁLISIS DE TENDENCIAS POR MODO (VENTAS HISTÓRICAS) 📈
 # ==============================================================================
 
 # Agrupar las ventas por año y modo (Cars, Buses, Vans, Trucks)
@@ -222,33 +296,8 @@ plt.xlabel('Año', fontsize=12)
 plt.ylabel('Valor Agregado (Stock/Ventas, etc.)', fontsize=12)
 plt.legend(title='Modo', loc='upper left')
 plt.tight_layout()
-# plt.savefig('tendencia_ventas_historicas.png')
-# plt.show() # Descomentar para ver en un entorno interactivo
+plt.savefig('tendencia_ventas_historicas.png')
+plt.show()
 print("Gráfico de Tendencia Histórica generado.")
 
-# ==============================================================================
-# 7.4. CORRELACIÓN (Para entender la relación entre variables imputadas/ajustadas)
-# ==============================================================================
-
-# Matriz de correlación para las variables clave después de la limpieza
-correlation_matrix = df_final[IMPUTATION_COLS].corr()
-
-plt.figure(figsize=(10, 8))
-sns.heatmap(
-    correlation_matrix,
-    annot=True,
-    fmt=".2f",
-    cmap='coolwarm',
-    linewidths=.5,
-    cbar_kws={'label': 'Coeficiente de Correlación'}
-)
-plt.title('Matriz de Correlación de Variables Numéricas Clave (Post-Limpieza)', fontsize=14)
-plt.tight_layout()
-# plt.savefig('matriz_correlacion.png')
-# plt.show() # Descomentar para ver en un entorno interactivo
-print("Matriz de Correlación generada.")
-
-print("\n--- Visualizaciones listas para incluir en el Informe de Limpieza. ---")
-print("El siguiente paso sería la implementación del panel en Streamlit.")
-
-# --- FIN DE LA EXTENSIÓN DEL CÓDIGO ---
+print("\n--- Visualizaciones completadas para el Informe de Limpieza. ---")
