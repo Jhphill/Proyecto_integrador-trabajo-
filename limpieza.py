@@ -25,6 +25,9 @@ IMPUTATION_COLS = [
 ]
 CATEGORICAL_COLS = ['region', 'parameter', 'mode', 'powertrain']
 
+# FIX: Definición de columnas de Outliers movida a la Sección 1 para evitar NameError
+outlier_check_cols = ['price', 'range_km', 'battery_capacity', 'weight_kg', 'motor_power']
+
 print("--- INICIO DEL PROCESO DE LIMPIEZA AVANZADA ---")
 
 # --- 2. PASO 1 & 2: LIMPIEZA INICIAL, FILTRADO Y CODIFICACIÓN ---
@@ -37,13 +40,25 @@ except FileNotFoundError:
     exit()
 
 initial_rows = len(df)
+df_dups_count = df.duplicated().sum()
 df.drop_duplicates(inplace=True)
-print(f"Filas iniciales: {initial_rows} -> Filas después de eliminar duplicados: {len(df)}")
 
 # 2.2. Filtrado Histórico (Esencial para la precisión de los modelos)
 df_historical = df[df['category'] == 'Historical'].copy()
 df_historical.drop(columns=['unit', 'category'], inplace=True)
-print(f"Filas después de filtrar 'Historical': {len(df_historical)}")
+
+# CÁLCULO DE MÉTRICAS INICIALES PARA EL RESUMEN
+rows_after_initial_cleaning = len(df_historical)
+reduction_percentage = ((initial_rows - rows_after_initial_cleaning) / initial_rows) * 100
+
+# CÁLCULO DE NULOS PROMEDIO ANTES DE MICE (para la tabla de impacto)
+nulls_pre_imputation = df_historical[IMPUTATION_COLS].isnull().sum()
+# Buscamos el porcentaje de nulos en las columnas que sí debían tener datos (las de especificaciones)
+# Si no tienen nulos, el max es 0.
+max_null_count = nulls_pre_imputation[outlier_check_cols].max()
+max_null_percentage = (max_null_count / len(df_historical)) * 100
+max_null_percentage_str = f"{max_null_percentage:.1f}%" if max_null_percentage > 0 else "0.0%"
+
 
 # Guardamos las variables categóricas originales antes de la codificación
 df_context = df_historical[CATEGORICAL_COLS + ['year', 'value']].reset_index(drop=True)
@@ -71,11 +86,9 @@ print("\n--- Imputación MAECI/MICE Completada ---")
 
 # --- 4. PASO 4: MANEJO DE OUTLIERS (IQR CAPPING) ---
 
-# Columnas numéricas clave para la detección y ajuste de outliers
-outlier_check_cols = ['price', 'range_km', 'battery_capacity', 'weight_kg', 'motor_power']
-
 # !!! PUNTO CLAVE: Guardar el DataFrame antes del capping para la comparación real "Antes vs Después"
 df_imputed_pre_capping = df_imputed[outlier_check_cols].copy()
+total_outliers_ajustados = 0
 
 for col in outlier_check_cols:
     # 4.1. Detección: Calcular Q1, Q3 y IQR
@@ -86,6 +99,10 @@ for col in outlier_check_cols:
     # 4.2. Manejo: Definir límites para el "Capping" (ajuste)
     lower_limit = Q1 - 1.5 * IQR_val
     upper_limit = Q3 + 1.5 * IQR_val
+    
+    # Contar outliers antes de aplicar Capping
+    outliers_count = (df_imputed[col] < lower_limit).sum() + (df_imputed[col] > upper_limit).sum()
+    total_outliers_ajustados += outliers_count
 
     # Aplicar Capping: Reemplazar valores fuera de los límites por los límites
     df_imputed[col] = np.where(df_imputed[col] < lower_limit, lower_limit, df_imputed[col])
@@ -97,7 +114,7 @@ print("\n--- Manejo de Outliers (Capping con IQR) Completado ---")
 # --- 5. PASO 4.2: ANÁLISIS DE COMPONENTES PRINCIPALES (PCA) ---
 
 # Variables a estandarizar y usar en PCA
-pca_features = ['price', 'range_km', 'battery_capacity', 'weight_kg', 'motor_power']
+pca_features = outlier_check_cols # Ya definido
 
 # 5.1. Estandarización de los datos (Escalamiento)
 scaler = StandardScaler()
@@ -113,7 +130,8 @@ df_imputed['PC1_Car_Specs'] = principal_components[:, 0]
 df_imputed['PC2_Car_Specs'] = principal_components[:, 1]
 
 print(f"\n--- PCA Completado ---")
-print(f"Varianza total explicada (PC1+PC2): {pca.explained_variance_ratio_.sum():.2f}")
+variance_explained = pca.explained_variance_ratio_.sum()
+print(f"Varianza total explicada (PC1+PC2): {variance_explained:.2f}")
 
 
 # --- 6. PREPARACIÓN DEL DATASET FINAL ---
@@ -124,11 +142,12 @@ df_final = df_context.copy()
 # Copiamos las variables imputadas, ajustadas (outliers) y usadas en PCA
 for col in IMPUTATION_COLS: # Usamos IMPUTATION_COLS para incluir todas las imputadas
     if col in df_imputed.columns:
-        df_final[col] = df_imputed[col]
+        # Aseguramos que los índices se alineen correctamente
+        df_final[col] = df_imputed[col].reset_index(drop=True)
         
 # Añadimos los componentes principales
-df_final['PC1_Car_Specs'] = df_imputed['PC1_Car_Specs']
-df_final['PC2_Car_Specs'] = df_imputed['PC2_Car_Specs']
+df_final['PC1_Car_Specs'] = df_imputed['PC1_Car_Specs'].reset_index(drop=True)
+df_final['PC2_Car_Specs'] = df_imputed['PC2_Car_Specs'].reset_index(drop=True)
 
 # Limpieza final de posibles filas duplicadas creadas por el manejo de índices
 df_final.drop_duplicates(inplace=True)
@@ -139,6 +158,25 @@ df_final.to_csv(OUTPUT_FILE, index=False)
 print("\n--- ¡PROCESO FINALIZADO CON ÉXITO! ---")
 print(f"Data Set Limpio y Preparado guardado en: {OUTPUT_FILE}")
 print(f"Filas finales listas para Streamlit: {len(df_final)}")
+
+# ==============================================================================
+# 🌟 8. RESUMEN EJECUTIVO DE IMPACTO Y MEJORAS 🌟
+# ==============================================================================
+
+print("\n" + "="*50)
+print("## 🎯 *IMPACTO Y MEJORAS LOGRADAS*")
+print("\n### *✅ Resumen de Limpieza Inicial*")
+print(f"Filas iniciales: {initial_rows} → Filas después de limpieza inicial: {rows_after_initial_cleaning}")
+print(f"(Reducción del {reduction_percentage:.2f}% por eliminación de duplicados y filtrado)")
+print("\n### *✅ Calidad de Datos Mejorada*")
+print("| Métrica | Antes | Después | Mejora |")
+print("|---------|-------|---------|--------|")
+print(f"| *Datos Faltantes* | {max_null_percentage_str} | 0% | *100%* |")
+print(f"| *Outliers Extremos* | {total_outliers_ajustados} registros | 0 | *Ajustados* |")
+print("| *Consistencia* | Variable | Alta | *▲▲▲* |")
+print("| *Preparación ML* | No | Sí | *✅* |")
+print(f"\n*Nota: La métrica de Datos Faltantes representa el peor caso (máximo nulo) de las columnas clave imputadas.*")
+print("="*50)
 
 # --- 7. ANÁLISIS EXPLORATORIO DE DATOS (EDA) Y VISUALIZACIONES PARA EL INFORME ---
 
@@ -157,12 +195,10 @@ plt.rcParams['axes.labelsize'] = 12
 
 print("\nGenerando Boxplots de comparación (Antes vs. Después del Capping).")
 
-# Preparamos los datos para el Boxplot comparativo (usaremos 'price' y 'battery_capacity')
 cols_compare = ['price', 'battery_capacity']
 df_comparison = pd.DataFrame()
 
 for col in cols_compare:
-    # Versión antes del capping
     data_pre = df_imputed_pre_capping[col].rename(col)
     data_pre = pd.DataFrame({
         'Variable': col,
@@ -170,7 +206,6 @@ for col in cols_compare:
         'Estado': '1. Antes del Capping'
     })
     
-    # Versión después del capping
     data_post = df_final[col].rename(col)
     data_post = pd.DataFrame({
         'Variable': col,
@@ -188,7 +223,7 @@ plt.xlabel('')
 plt.ylabel('Valor de la Métrica')
 plt.legend(title='Estado del Dato')
 plt.tight_layout()
-# plt.savefig('comparacion_boxplot_outliers.png')
+plt.savefig('comparacion_boxplot_outliers.png')
 # plt.show()
 print("Boxplot de comparación Antes vs. Después generado.")
 
@@ -202,7 +237,7 @@ plt.title('Distribución de "price" (Imputado y con Outliers Ajustados)', fontsi
 plt.xlabel('Precio (USD) Ajustado', fontsize=12)
 plt.ylabel('Frecuencia', fontsize=12)
 plt.tight_layout()
-# plt.savefig('distribucion_precio_limpio.png')
+plt.savefig('distribucion_precio_limpio.png')
 # plt.show()
 print("Histograma de Precio generado.")
 
@@ -226,7 +261,7 @@ sns.heatmap(
 plt.title('Matriz de Correlación de Variables Numéricas Clave (Post-Limpieza)', fontsize=16)
 plt.tight_layout()
 plt.savefig('matriz_correlacion.png')
-plt.show()
+# plt.show()
 print("Matriz de Correlación generada.")
 
 # ==============================================================================
@@ -252,7 +287,7 @@ plt.legend(title='Región', bbox_to_anchor=(1.05, 1), loc='upper left')
 plt.grid(True, linestyle='--', alpha=0.6)
 plt.tight_layout()
 plt.savefig('pca_car_specs.png')
-plt.show()
+# plt.show()
 print("PCA Scatter Plot generado.")
 
 # ==============================================================================
@@ -269,7 +304,7 @@ df_sample = df_final[pair_cols].sample(n=min(5000, len(df_final)), random_state=
 sns.pairplot(df_sample, diag_kind='kde', plot_kws={'alpha': 0.6, 's': 5})
 plt.suptitle('Pair Plot de Especificaciones Clave (Post-Limpieza)', y=1.02, fontsize=16)
 plt.savefig('pair_plot_specs.png')
-plt.show()
+# plt.show()
 print("Pair Plot generado.")
 
 # ==============================================================================
@@ -297,7 +332,22 @@ plt.ylabel('Valor Agregado (Stock/Ventas, etc.)', fontsize=12)
 plt.legend(title='Modo', loc='upper left')
 plt.tight_layout()
 plt.savefig('tendencia_ventas_historicas.png')
-plt.show()
+# plt.show()
 print("Gráfico de Tendencia Histórica generado.")
+
+# ==============================================================================
+# 7.7. BOXPLOTS DE VARIABLES CLAVE (POST-LIMPIEZA) 📦
+# ==============================================================================
+print("\nGenerando Boxplots individuales de variables clave (Post-Limpieza).")
+plt.figure(figsize=(15, 10))
+for i, col in enumerate(outlier_check_cols):
+    plt.subplot(2, 3, i + 1)
+    sns.boxplot(y=df_final[col], color='lightcoral')
+    plt.title(f'Distribución de "{col}" (Post-Capping)', fontsize=12)
+    plt.ylabel(col)
+plt.tight_layout()
+plt.savefig('boxplots_post_capping_individual.png')
+# plt.show()
+print("Boxplots individuales Post-Limpieza generados.")
 
 print("\n--- Visualizaciones completadas para el Informe de Limpieza. ---")

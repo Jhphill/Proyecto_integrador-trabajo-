@@ -17,7 +17,7 @@ st.header("Panel Interactivo Basado en Datos Limpios y Preparados")
 st.caption("Los datos han sido sometidos a Imputación MICE, Capping IQR y Reducción de Dimensionalidad (PCA).")
 
 # --- 2. CARGA DEL DATA SET LIMPIO ---
-FILE_PATH_PREPARED = "C:\\Users\\QUINTEROS\\Documents\\Actividad_de_auto_aprendizaje_integrador\\df_final_preparado.csv"
+FILE_PATH_PREPARED = "C:\\Users\\juanf\\OneDrive\\Documentos\\Proyecto_integrador-trabajo-\\df_final_preparado.csv"
 
 @st.cache_data
 def load_data(path):
